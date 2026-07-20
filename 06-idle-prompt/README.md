@@ -2,16 +2,22 @@
 
 Detects when OpenCode is **truly idle** and automatically sends `hello` to the current session. Ensures that a new `hello` is only sent after the previous reply has been fully processed.
 
-## Design: ExecutionTracker + Hello Lock
+## Design: OpenCodeTrueIdleDetector + Hello Lock
 
-Built on the same composite state machine as `05-idle-check-plugin`, adding a `helloLocked` flag and blocking `prompt()` call for **guaranteed reply completion**.
+`OpenCodeTrueIdleDetector` 是独立的可复用类（`src/opencode-true-idle-detector.js`），封装了复合状态机 + 200ms 去抖逻辑。通过 `onIdle` 异步回调通知消费方。
 
 ```
-TRUE_IDLE + !helloLocked
-  → sendHello("hello") → helloLocked = true
-  → client.session.prompt() blocks until AI fully replies
-  → helloLocked = false
-  → next TRUE_IDLE sends another hello
+OpenCodeTrueIdleDetector.handleEvent(event)
+  → 状态机判定 + 200ms 去抖
+  → TRUE_IDLE → onIdle(sessionID) 异步回调
+```
+
+消费方在回调中管理 `helloLocked` 锁：
+
+```
+onIdle(sessionID)
+  ├── helloLocked == true → SKIP
+  └── helloLocked == false → sendHello → prompt() 阻塞 → 解锁
 ```
 
 | Signal | False Positives |

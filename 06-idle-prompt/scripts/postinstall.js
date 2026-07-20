@@ -14,9 +14,13 @@ const CONFIG_PATH = join(OPENCODE_DIR, "opencode.json");
 async function deploy() {
   console.log("[deploy] Deploying idle-prompt plugin to .opencode/ ...");
 
-  await mkdir(join(PLUGIN_DIR, "src"), { recursive: true });
+  const srcDir = join(PROJECT_ROOT, "src");
+  const destSrcDir = join(PLUGIN_DIR, "src");
+  await mkdir(destSrcDir, { recursive: true });
 
-  await cp(join(PROJECT_ROOT, "src", "index.js"), join(PLUGIN_DIR, "src", "index.js"));
+  for (const file of ["index.js", "opencode-true-idle-detector.js"]) {
+    await cp(join(srcDir, file), join(destSrcDir, file));
+  }
 
   let config = {};
   if (existsSync(CONFIG_PATH)) {
