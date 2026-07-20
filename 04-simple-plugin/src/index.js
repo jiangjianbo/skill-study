@@ -1,9 +1,11 @@
-import log from "./logger.js";
+import { createLogger } from "./logger.js";
+import path from "node:path";
 
 const PLUGIN_NAME = "[04-simple-plugin]";
 
 const server = async (input, options) => {
   const { client, project, directory, worktree, $ } = input;
+  const log = createLogger(path.join(directory, ".log"));
 
   return {
     dispose: async () => {
