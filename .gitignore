@@ -3,3 +3,4 @@ node_modules/
 
 /04-simple-plugin/.opencode
 /05-idle-check-plugin/.opencode
+/06-idle-prompt/.opencode
