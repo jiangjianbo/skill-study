@@ -81,14 +81,16 @@ function createLogger(logDir) {
 
       log('SUBAGENT_OUTPUT', `session=${sessionID} subSessionId=${subSessionId} count=${subagentState.count} output=${JSON.stringify(output.slice(0, 500))}`);
 
+      const taskEnvelope = `<task id="${subSessionId}" state="completed">
+<summary>Subagent hello greeting completed</summary>
+<task_result>
+${output.slice(0, 20000)}
+</task_result>
+</task>`;
+
       try {
-        await $.transform.chat.messages({
-          type: 'add',
-          sessionID,
-          role: 'assistant',
-          parts: [{ type: 'text', text: output }],
-        });
-        log('SUBAGENT_TUI', `session=${sessionID} subSessionId=${subSessionId} output sent to TUI`);
+        await client.app.log({ body: { message: `[Subagent] ${output}` } });
+        log('SUBAGENT_TUI', `session=${sessionID} subSessionId=${subSessionId} output logged to app`);
       } catch (err) {
         log('SUBAGENT_TUI_ERR', `session=${sessionID} subSessionId=${subSessionId} ${err.message}`);
       }
