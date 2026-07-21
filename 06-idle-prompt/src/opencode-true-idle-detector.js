@@ -13,7 +13,6 @@ export class OpenCodeTrueIdleDetector {
   #onUserInterrupt;
   #onUserInput;
   #interrupted = false;
-  #promptInFlight = false;
   #skipNextUserMessage = false;
 
   constructor({ log, onIdle, onIdleExit, onUserInterrupt, onUserInput }) {
@@ -32,12 +31,12 @@ export class OpenCodeTrueIdleDetector {
     return this.#interrupted;
   }
 
-  setPromptInFlight(v) {
-    this.#promptInFlight = v;
-  }
-
   setSkipNextUserMessage() {
     this.#skipNextUserMessage = true;
+  }
+
+  clearSkipNextUserMessage() {
+    this.#skipNextUserMessage = false;
   }
 
   #scheduleCheck(sessionID, delay) {
@@ -108,6 +107,7 @@ export class OpenCodeTrueIdleDetector {
   }
 
   handleEvent({ event }) {
+    if (!event) return;
     const { type, properties = {}, data = {} } = event;
     const sid = properties.sessionID || data.sessionID || properties.info?.id || '-';
 
@@ -123,6 +123,7 @@ export class OpenCodeTrueIdleDetector {
           this.#scheduleCheck(sid);
         }
         if (oldStatus === 'idle' && s.type === 'busy') {
+          this.#currentDelay = this.#BASE_DELAY;
           this.#log('IDLE_END', `session=${sid} idle -> busy`);
           this.#onIdleExit?.(sid);
         }
