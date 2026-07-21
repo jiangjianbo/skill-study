@@ -18,7 +18,7 @@ async function deploy() {
   const destSrcDir = join(PLUGIN_DIR, "src");
   await mkdir(destSrcDir, { recursive: true });
 
-  for (const file of ["index.js", "opencode-true-idle-detector.js"]) {
+  for (const file of ["index.js", "opencode-true-idle-detector.js", "subagent-trigger.js"]) {
     await cp(join(srcDir, file), join(destSrcDir, file));
   }
 

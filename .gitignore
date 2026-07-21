@@ -5,3 +5,4 @@ node_modules/
 /05-idle-check-plugin/.opencode
 /06-idle-prompt/.opencode
 /07-subagent/.opencode
+/08-subagent-output/.opencode

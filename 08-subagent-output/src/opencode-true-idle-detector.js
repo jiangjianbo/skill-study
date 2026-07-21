@@ -13,7 +13,6 @@ export class OpenCodeTrueIdleDetector {
   #onUserInterrupt;
   #onUserInput;
   #interrupted = false;
-  #skipNextUserMessage = false;
 
   constructor({ log, onIdle, onIdleExit, onUserInterrupt, onUserInput }) {
     this.#log = log;
@@ -29,14 +28,6 @@ export class OpenCodeTrueIdleDetector {
 
   get interrupted() {
     return this.#interrupted;
-  }
-
-  setSkipNextUserMessage() {
-    this.#skipNextUserMessage = true;
-  }
-
-  clearSkipNextUserMessage() {
-    this.#skipNextUserMessage = false;
   }
 
   #scheduleCheck(sessionID, delay) {
@@ -98,12 +89,11 @@ export class OpenCodeTrueIdleDetector {
       this.#interrupted = true;
       this.#log('INTERRUPT', `session=${sessionID} msg=${messageID} AI response aborted by user`);
       this.#onUserInterrupt?.(sessionID);
-    } else if (role === 'user' && !this.#skipNextUserMessage) {
-      this.#log('USER_INPUT', `session=${sessionID} msg=${messageID} manual user input`);
+    } else if (role === 'user') {
+      this.#log('USER_INPUT', `session=${sessionID} msg=${messageID} user input`);
       this.handleUserInput(sessionID);
       this.#onUserInput?.(sessionID);
     }
-    this.#skipNextUserMessage = false;
   }
 
   handleEvent({ event }) {

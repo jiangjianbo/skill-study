@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { OpenCodeTrueIdleDetector } from './opencode-true-idle-detector.js';
+import { SubagentTrigger } from './subagent-trigger.js';
 
 function createLogger(logDir) {
   if (!fs.existsSync(logDir)) {
@@ -15,95 +16,26 @@ function createLogger(logDir) {
   };
 }
 
-  const server = async (input) => {
-    const { directory, client, $ } = input;
-    const logDir = path.join(directory, '.log');
-    const log = createLogger(logDir);
+const TRIGGER_DELAY_MS = 60_000;
+const SUBAGENT_AGENT_TYPE = 'explore';
+const SUBAGENT_PROMPT = 'Hello! 请简短地打个招呼并自我介绍一下。';
 
-    const subagentState = {
-      pendingTimer: null,
-      running: false,
-      count: 0,
-    };
-    let mainSessionID = null;
+const server = async (input) => {
+  const { directory, client } = input;
+  const logDir = path.join(directory, '.log');
+  const log = createLogger(logDir);
+
+  const trigger = new SubagentTrigger({ client, log, directory });
+
+  let mainSessionID = null;
+  let pendingTimer = null;
 
   function cancelPendingTimer(sessionID) {
-    if (subagentState.pendingTimer) {
-      clearTimeout(subagentState.pendingTimer);
-      subagentState.pendingTimer = null;
-      log('CANCEL', `session=${sessionID} cancelled scheduled subagent`);
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+      log('CANCEL', `session=${sessionID} cancelled scheduled trigger`);
     }
-  }
-
-  async function launchSubagent(sessionID) {
-    subagentState.running = true;
-    subagentState.count++;
-    log('SUBAGENT', `session=${sessionID} count=${subagentState.count} launching subagent`);
-
-    let subSessionId = null;
-    try {
-      const createResult = await client.session.create({
-        body: {
-          parentID: sessionID,
-          title: `subagent-hello-${subagentState.count}`,
-        },
-        query: { directory },
-      });
-      subSessionId = createResult.data.id;
-      log('SUBAGENT_CREATED', `session=${sessionID} subSessionId=${subSessionId}`);
-
-      detector.setSkipNextUserMessage();
-      const promptResult = await client.session.prompt({
-        path: { id: subSessionId },
-        body: {
-          agent: 'explore',
-          tools: {
-            write: false,
-            edit: false,
-            patch: false,
-            save_plan: false,
-            update_task_status: false,
-          },
-          parts: [{
-            type: 'text',
-            text: 'Hello! Please respond with a simple greeting and a short introduction of yourself.',
-          }],
-        },
-      });
-
-      const raw = JSON.stringify(promptResult).slice(0, 2000);
-      log('SUBAGENT_DONE', `session=${sessionID} subSessionId=${subSessionId} count=${subagentState.count} raw=${raw}`);
-
-      const output = promptResult.data?.parts
-        ?.filter((p) => p.type === 'text')
-        ?.map((p) => p.text)
-        ?.join('\n') ?? '(no output)';
-
-      log('SUBAGENT_OUTPUT', `session=${sessionID} subSessionId=${subSessionId} count=${subagentState.count} output=${JSON.stringify(output.slice(0, 500))}`);
-
-      const taskEnvelope = `<task id="${subSessionId}" state="completed">
-<summary>Subagent hello greeting completed</summary>
-<task_result>
-${output.slice(0, 20000)}
-</task_result>
-</task>`;
-
-      try {
-        await client.app.log({ body: { message: `[Subagent] ${output}` } });
-        log('SUBAGENT_TUI', `session=${sessionID} subSessionId=${subSessionId} output logged to app`);
-      } catch (err) {
-        log('SUBAGENT_TUI_ERR', `session=${sessionID} subSessionId=${subSessionId} ${err.message}`);
-      }
-    } catch (err) {
-      log('SUBAGENT_ERR', `session=${sessionID} subSessionId=${subSessionId} count=${subagentState.count} ${err.message}`);
-    }
-
-    if (subSessionId) {
-      await client.session.delete({ path: { id: subSessionId } }).catch(() => {});
-      log('SUBAGENT_CLEANUP', `session=${sessionID} subSessionId=${subSessionId} deleted`);
-    }
-
-    subagentState.running = false;
   }
 
   const detector = new OpenCodeTrueIdleDetector({
@@ -111,22 +43,25 @@ ${output.slice(0, 20000)}
     onIdle: async (sessionID) => {
       if (!mainSessionID) mainSessionID = sessionID;
       if (sessionID !== mainSessionID) {
-        log('SKIP', `session=${sessionID} not main session, skipping`);
+        log('SKIP', `session=${sessionID} not main session`);
         return;
       }
-      if (subagentState.running) {
-        log('SKIP', `session=${sessionID} subagent already running, skipping`);
+      if (trigger.inFlight) {
+        log('SKIP', `session=${sessionID} trigger in flight`);
         return;
       }
-      if (subagentState.pendingTimer) {
-        log('SKIP', `session=${sessionID} subagent already scheduled, skipping`);
+      if (pendingTimer) {
+        log('SKIP', `session=${sessionID} trigger already scheduled`);
         return;
       }
-      subagentState.pendingTimer = setTimeout(() => {
-        subagentState.pendingTimer = null;
-        launchSubagent(sessionID);
-      }, 60_000);
-      log('SCHEDULE', `session=${sessionID} subagent scheduled in 60s`);
+      pendingTimer = setTimeout(() => {
+        pendingTimer = null;
+        trigger.trigger(sessionID, {
+          agentType: SUBAGENT_AGENT_TYPE,
+          prompt: SUBAGENT_PROMPT,
+        });
+      }, TRIGGER_DELAY_MS);
+      log('SCHEDULE', `session=${sessionID} trigger scheduled in ${TRIGGER_DELAY_MS}ms`);
     },
     onIdleExit: (sessionID) => {
       if (mainSessionID && sessionID !== mainSessionID) return;
@@ -135,34 +70,34 @@ ${output.slice(0, 20000)}
     onUserInterrupt: (sessionID) => {
       if (mainSessionID && sessionID !== mainSessionID) return;
       cancelPendingTimer(sessionID);
-      subagentState.running = false;
-      subagentState.count = 0;
-      log('INTERRUPT', `session=${sessionID} user interrupt, reset subagentState`);
+      log('INTERRUPT', `session=${sessionID} user interrupt`);
     },
     onUserInput: (sessionID) => {
       if (mainSessionID && sessionID !== mainSessionID) return;
       cancelPendingTimer(sessionID);
-      subagentState.running = false;
-      subagentState.count = 0;
-      log('RESET', `session=${sessionID} user input, reset subagentState`);
     },
   });
 
   log('INIT', 'Plugin initialized');
-  log('DESIGN', 'Subagent: idle detection -> 1min wait -> async subagent -> wait completion');
+  log('DESIGN', 'Subagent: idle detection -> 60s wait -> trigger main agent to call Task tool');
+  log('DESIGN', `agentType=${SUBAGENT_AGENT_TYPE} delay=${TRIGGER_DELAY_MS}ms`);
   log('DESIGN', JSON.stringify({
+    mechanism: 'agent-driven Task tool (host manages subagent session + link + persistence)',
     signals: ['session.status', 'session.idle', 'permission.asked', 'question.asked'],
-    rule: 'TRUE_IDLE -> wait 60s -> create child session -> prompt explore(subagent) "hello" -> wait reply -> cleanup',
+    rule: 'TRUE_IDLE -> wait 60s -> prompt main session -> agent calls Task(explore) -> host renders link',
   }));
 
   return {
-    event: async (input) => { detector.handleEvent(input); return; },
+    event: async (input) => {
+      detector.handleEvent(input);
+      return;
+    },
 
-    "chat.message": async (input, output) => {
+    'chat.message': async (input, output) => {
       const { sessionID, messageID, model } = input;
       const { message, parts } = output;
       const role = message?.role || 'unknown';
-      const textContent = parts?.map(p => p.text).filter(Boolean).join('\n');
+      const textContent = parts?.map((p) => p.text).filter(Boolean).join('\n');
       const modelStr = model ? `${model.providerID}/${model.modelID}` : '';
       const entry = textContent.slice(0, 2000);
 
