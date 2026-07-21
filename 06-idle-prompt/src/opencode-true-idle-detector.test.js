@@ -211,7 +211,7 @@ describe('OpenCodeTrueIdleDetector', () => {
   });
 
   describe('onIdleExit', () => {
-    it('should fire onIdleExit when idle→busy transition occurs', async () => {
+    it('should fire onIdleExit when idle→busy transition occurs via handleEvent', async () => {
       det.detector.handleEvent({
         event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'idle' } } },
       });
@@ -221,6 +221,177 @@ describe('OpenCodeTrueIdleDetector', () => {
       });
 
       expect(det.onIdleExit).toHaveBeenCalledWith('s1');
+    });
+
+    it('should fire onIdleExit when handleUserInput is called while idle', async () => {
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'idle' } } },
+      });
+      vi.clearAllMocks();
+
+      det.detector.handleUserInput('s1');
+
+      expect(det.log).toHaveBeenCalledWith('IDLE_END',
+        'session=s1 handleUserInput while idle');
+      expect(det.onIdleExit).toHaveBeenCalledWith('s1');
+    });
+
+    it('should NOT fire onIdleExit when handleUserInput is called while busy', async () => {
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'busy' } } },
+      });
+      vi.clearAllMocks();
+
+      det.detector.handleUserInput('s1');
+
+      expect(det.onIdleExit).not.toHaveBeenCalled();
+    });
+
+    it('should fire onIdleExit via handleChatMessage when user sends message while idle', async () => {
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'idle' } } },
+      });
+      vi.clearAllMocks();
+
+      det.detector.handleChatMessage(
+        { sessionID: 's1', messageID: 'm1' },
+        { message: { role: 'user', content: 'hi' }, parts: [{ type: 'text', text: 'hi' }] },
+      );
+
+      expect(det.log).toHaveBeenCalledWith('IDLE_END',
+        'session=s1 handleUserInput while idle');
+      expect(det.onIdleExit).toHaveBeenCalledWith('s1');
+    });
+
+    it('should NOT fire onIdleExit via handleChatMessage when user sends message while busy', async () => {
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'busy' } } },
+      });
+      vi.clearAllMocks();
+
+      det.detector.handleChatMessage(
+        { sessionID: 's1', messageID: 'm1' },
+        { message: { role: 'user', content: 'hi' }, parts: [{ type: 'text', text: 'hi' }] },
+      );
+
+      expect(det.onIdleExit).not.toHaveBeenCalled();
+    });
+
+    it('should fire onIdleExit once for each idle→busy transition (not busy→busy)', async () => {
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'idle' } } },
+      });
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'busy' } } },
+      });
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'busy' } } },
+      });
+
+      expect(det.onIdleExit).toHaveBeenCalledTimes(1);
+    });
+
+    it('should NOT fire onIdleExit on ESC interrupt via handleCancel', async () => {
+      det.detector.handleCancel('s1');
+
+      expect(det.onIdleExit).not.toHaveBeenCalled();
+    });
+
+    it('should NOT fire onIdleExit on ESC interrupt via session.error', async () => {
+      det.detector.handleEvent({
+        event: {
+          type: 'session.error',
+          properties: {
+            sessionID: 's1',
+            error: { name: 'MessageAbortedError', data: { message: 'cancelled' } },
+          },
+        },
+      });
+
+      expect(det.onIdleExit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('handleUserInput state reset', () => {
+    it('should reset ALL internal state when handleUserInput is called', () => {
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'idle' } } },
+      });
+      det.detector.handleEvent({
+        event: { type: 'permission.asked', properties: { sessionID: 's1', action: 'read' } },
+      });
+      det.detector.handleCancel('s1');
+      vi.clearAllMocks();
+
+      det.detector.handleUserInput('s1');
+
+      expect(det.detector.interrupted).toBe(false);
+      expect(det.log).toHaveBeenCalledWith('IDLE_END', 'session=s1 handleUserInput while idle');
+      expect(det.log).toHaveBeenCalledWith('RESET', 'session=s1 state reset on user input');
+    });
+
+    it('should cancel pending check when handleUserInput is called with pending idle', async () => {
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'idle' } } },
+      });
+
+      det.detector.handleUserInput('s1');
+
+      vi.advanceTimersByTime(200);
+      await flush();
+
+      expect(det.onIdle).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('question events', () => {
+    it('should delay idle when question is pending', async () => {
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'idle' } } },
+      });
+      det.detector.handleEvent({
+        event: { type: 'question.asked', properties: { sessionID: 's1' } },
+      });
+
+      vi.advanceTimersByTime(200);
+      await flush();
+
+      expect(det.onIdle).not.toHaveBeenCalled();
+      expect(det.log).toHaveBeenCalledWith('SKIP', expect.stringContaining('not true idle'));
+    });
+
+    it('should recheck when question.replied2 resolves', async () => {
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'idle' } } },
+      });
+      det.detector.handleEvent({
+        event: { type: 'question.asked', properties: { sessionID: 's1' } },
+      });
+      det.detector.handleEvent({
+        event: { type: 'question.replied2', properties: { sessionID: 's1' } },
+      });
+
+      vi.advanceTimersByTime(200);
+      await flush();
+
+      expect(det.onIdle).toHaveBeenCalledWith('s1');
+    });
+
+    it('should recheck when question.rejected2 resolves', async () => {
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'idle' } } },
+      });
+      det.detector.handleEvent({
+        event: { type: 'question.asked', properties: { sessionID: 's1' } },
+      });
+      det.detector.handleEvent({
+        event: { type: 'question.rejected2', properties: { sessionID: 's1' } },
+      });
+
+      vi.advanceTimersByTime(200);
+      await flush();
+
+      expect(det.onIdle).toHaveBeenCalledWith('s1');
     });
   });
 
@@ -255,6 +426,21 @@ describe('OpenCodeTrueIdleDetector', () => {
       await flush();
 
       expect(det.onIdle).toHaveBeenCalledWith('s1');
+    });
+
+    it('should still fire onIdleExit when idle→busy with permission pending', async () => {
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'idle' } } },
+      });
+      det.detector.handleEvent({
+        event: { type: 'permission.asked', properties: { sessionID: 's1', action: 'read' } },
+      });
+
+      det.detector.handleEvent({
+        event: { type: 'session.status', properties: { sessionID: 's1', status: { type: 'busy' } } },
+      });
+
+      expect(det.onIdleExit).toHaveBeenCalledWith('s1');
     });
   });
 });
