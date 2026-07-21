@@ -25,6 +25,15 @@ const server = async (input) => {
     running: false,
     count: 0,
   };
+  let mainSessionID = null;
+
+  function cancelPendingTimer(sessionID) {
+    if (subagentState.pendingTimer) {
+      clearTimeout(subagentState.pendingTimer);
+      subagentState.pendingTimer = null;
+      log('CANCEL', `session=${sessionID} cancelled scheduled subagent`);
+    }
+  }
 
   async function launchSubagent(sessionID) {
     subagentState.running = true;
@@ -43,10 +52,11 @@ const server = async (input) => {
       subSessionId = createResult.data.id;
       log('SUBAGENT_CREATED', `session=${sessionID} subSessionId=${subSessionId}`);
 
+      detector.setSkipNextUserMessage();
       const promptResult = await client.session.prompt({
         path: { id: subSessionId },
         body: {
-          agent: 'explorer',
+          agent: 'explore',
           tools: {
             write: false,
             edit: false,
@@ -61,12 +71,15 @@ const server = async (input) => {
         },
       });
 
+      const raw = JSON.stringify(promptResult).slice(0, 2000);
+      log('SUBAGENT_DONE', `session=${sessionID} subSessionId=${subSessionId} count=${subagentState.count} raw=${raw}`);
+
       const output = promptResult.data?.parts
         ?.filter((p) => p.type === 'text')
         ?.map((p) => p.text)
         ?.join('\n') ?? '(no output)';
 
-      log('SUBAGENT_DONE', `session=${sessionID} subSessionId=${subSessionId} count=${subagentState.count} output=${JSON.stringify(output.slice(0, 500))}`);
+      log('SUBAGENT_OUTPUT', `session=${sessionID} subSessionId=${subSessionId} count=${subagentState.count} output=${JSON.stringify(output.slice(0, 500))}`);
     } catch (err) {
       log('SUBAGENT_ERR', `session=${sessionID} subSessionId=${subSessionId} count=${subagentState.count} ${err.message}`);
     }
@@ -82,8 +95,17 @@ const server = async (input) => {
   const detector = new OpenCodeTrueIdleDetector({
     log,
     onIdle: async (sessionID) => {
+      if (!mainSessionID) mainSessionID = sessionID;
+      if (sessionID !== mainSessionID) {
+        log('SKIP', `session=${sessionID} not main session, skipping`);
+        return;
+      }
       if (subagentState.running) {
         log('SKIP', `session=${sessionID} subagent already running, skipping`);
+        return;
+      }
+      if (subagentState.pendingTimer) {
+        log('SKIP', `session=${sessionID} subagent already scheduled, skipping`);
         return;
       }
       subagentState.pendingTimer = setTimeout(() => {
@@ -92,13 +114,31 @@ const server = async (input) => {
       }, 60_000);
       log('SCHEDULE', `session=${sessionID} subagent scheduled in 60s`);
     },
+    onIdleExit: (sessionID) => {
+      if (mainSessionID && sessionID !== mainSessionID) return;
+      cancelPendingTimer(sessionID);
+    },
+    onUserInterrupt: (sessionID) => {
+      if (mainSessionID && sessionID !== mainSessionID) return;
+      cancelPendingTimer(sessionID);
+      subagentState.running = false;
+      subagentState.count = 0;
+      log('INTERRUPT', `session=${sessionID} user interrupt, reset subagentState`);
+    },
+    onUserInput: (sessionID) => {
+      if (mainSessionID && sessionID !== mainSessionID) return;
+      cancelPendingTimer(sessionID);
+      subagentState.running = false;
+      subagentState.count = 0;
+      log('RESET', `session=${sessionID} user input, reset subagentState`);
+    },
   });
 
   log('INIT', 'Plugin initialized');
   log('DESIGN', 'Subagent: idle detection -> 1min wait -> async subagent -> wait completion');
   log('DESIGN', JSON.stringify({
     signals: ['session.status', 'session.idle', 'permission.asked', 'question.asked'],
-    rule: 'TRUE_IDLE -> wait 60s -> create child session -> prompt explorer(subagent) "hello" -> wait reply -> cleanup',
+    rule: 'TRUE_IDLE -> wait 60s -> create child session -> prompt explore(subagent) "hello" -> wait reply -> cleanup',
   }));
 
   return {
@@ -113,23 +153,17 @@ const server = async (input) => {
       const entry = textContent.slice(0, 2000);
 
       if (role === 'user') {
-        if (subagentState.pendingTimer) {
-          clearTimeout(subagentState.pendingTimer);
-          subagentState.pendingTimer = null;
-          log('CANCEL', `session=${sessionID} cancelled scheduled subagent (user input)`);
-        }
         log('USER_INPUT', `session=${sessionID} msg=${messageID} model=${modelStr} len=${textContent.length} text=${JSON.stringify(entry)}`);
       } else if (role === 'assistant') {
         log('AI_REPLY', `session=${sessionID} msg=${messageID} model=${modelStr} len=${textContent.length} text=${JSON.stringify(entry)}`);
       }
+
+      detector.handleChatMessage(input, output);
     },
 
     dispose: async () => {
       log('DISPOSE', 'Plugin shutting down');
-      if (subagentState.pendingTimer) {
-        clearTimeout(subagentState.pendingTimer);
-        subagentState.pendingTimer = null;
-      }
+      cancelPendingTimer('dispose');
       detector.dispose();
     },
   };
