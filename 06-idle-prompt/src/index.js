@@ -28,18 +28,27 @@ const server = async (input) => {
   async function sendHello(sessionID) {
     helloState.locked = true;
     helloState.count++;
+    detector.setPromptInFlight(true);
+    detector.setSkipNextUserMessage();
     log('HELLO', `session=${sessionID} count=${helloState.count} sending hello`);
     try {
-      await client.session.prompt({
+      const result = await client.session.prompt({
         path: { id: sessionID },
         body: {
           parts: [{ type: 'text', text: 'hello' }],
         },
       });
-      log('HELLO_DONE', `session=${sessionID} count=${helloState.count} reply complete`);
+      if (result?.data?.info?.error?.name === 'MessageAbortedError') {
+        log('INTERRUPT', `session=${sessionID} count=${helloState.count} hello aborted by user`);
+        detector.handleCancel(sessionID);
+      } else {
+        log('HELLO_DONE', `session=${sessionID} count=${helloState.count} reply complete`);
+      }
     } catch (err) {
       log('HELLO_ERR', `session=${sessionID} count=${helloState.count} ${err.message}`);
+      detector.handleCancel(sessionID);
     }
+    detector.setPromptInFlight(false);
     helloState.locked = false;
   }
 
@@ -49,6 +58,16 @@ const server = async (input) => {
       if (!helloState.locked) {
         await sendHello(sessionID);
       }
+    },
+    onUserInterrupt: (sessionID) => {
+      helloState.locked = false;
+      helloState.count = 0;
+      log('INTERRUPT', `session=${sessionID} user interrupt, reset helloState`);
+    },
+    onUserInput: (sessionID) => {
+      helloState.locked = false;
+      helloState.count = 0;
+      log('RESET', `session=${sessionID} user input, reset helloState`);
     },
   });
 
@@ -71,12 +90,12 @@ const server = async (input) => {
       const entry = textContent.slice(0, 2000);
 
       if (role === 'user') {
-        helloState.locked = false;
-        helloState.count = 0;
         log('USER_INPUT', `session=${sessionID} msg=${messageID} model=${modelStr} len=${textContent.length} text=${JSON.stringify(entry)}`);
       } else if (role === 'assistant') {
         log('AI_REPLY', `session=${sessionID} msg=${messageID} model=${modelStr} len=${textContent.length} text=${JSON.stringify(entry)}`);
       }
+
+      detector.handleChatMessage(input, output);
     },
 
     dispose: async () => {

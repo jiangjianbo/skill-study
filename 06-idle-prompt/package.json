@@ -9,10 +9,18 @@
     }
   },
   "scripts": {
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
-  "keywords": ["opencode", "opencode-plugin"],
+  "keywords": [
+    "opencode",
+    "opencode-plugin"
+  ],
   "dependencies": {
     "@opencode-ai/plugin": "^1.17.11"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
   }
 }

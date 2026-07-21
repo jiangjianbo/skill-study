@@ -23,33 +23,50 @@ ExecutionTracker {
   waitingPermission: boolean     ← 来自 permission.asked/replied
   waitingQuestion: boolean       ← 来自 question.asked/replied2/rejected2
   idleSince: number | null       ← 上次 session.idle 时间戳
-  pendingCheck: timeout | null   ← 200ms 去抖定时器
+  pendingCheck: timeout | null   ← 去抖定时器（延时取决于 currentDelay）
+  currentDelay: number           ← 当前检测延时，200ms 起步有退避
 }
 ```
 
 ### 判定逻辑
 
 ```
+chat.message (role=user)
+  └── resetIdleState()
+        ├── clearTimeout(pendingCheck)
+        ├── status = 'busy'
+        ├── waitingPermission = false
+        ├── waitingQuestion = false
+        └── currentDelay = BASE_DELAY (200ms)
+
 session.status → idle
   ├── waitingPermission == true → NOT idle
   ├── waitingQuestion == true   → NOT idle
-  └── 两者均为 false → 启动 200ms 去抖
+  └── 两者均为 false → 启动 currentDelay 去抖
                         ├── 期间收到 busy → 取消
                         └── 到期无变化 → TRUE_IDLE ✓
-```
+                              ├── currentDelay *= 2 (上限 30s)
+                              └── 循环：再次调度下一轮 currentDelay 检查
+
+用户长时间空闲时，TRUE_IDLE 会按递增间隔周期性持续触发，直到用户再次输入或 session 变 busy 为止。
+
+每次用户输入 → 重置所有状态 + 退避计时器归零（startId=200ms）。
+每次 TRUE_IDLE → 当前延时翻倍（200ms→400ms→800ms→...，无上限）。
 
 ### 信号与事件映射
 
 | Event Type | 对状态机的影响 |
 |---|---|
-| `session.status` (type=idle) | 设 status=idle，触发去抖检查 |
+| `session.status` (type=idle) | 设 status=idle，触发去抖检查（使用 currentDelay） |
 | `session.status` (type=busy) | 设 status=busy，取消 pending 去抖 |
 | `session.idle` | 记录 idleSince 时间戳（辅助信息） |
 | `permission.asked` | waitingPermission=true |
-| `permission.replied` | waitingPermission=false，触发重检 |
+| `permission.replied` | waitingPermission=false，触发重检（200ms 固定） |
 | `question.asked` | waitingQuestion=true |
-| `question.replied2` | waitingQuestion=false，触发重检 |
-| `question.rejected2` | waitingQuestion=false，触发重检 |
+| `question.replied2` | waitingQuestion=false，触发重检（200ms 固定） |
+| `question.rejected2` | waitingQuestion=false，触发重检（200ms 固定） |
+| `chat.message` (role=user) | **resetIdleState()** — 清空所有标志、取消 pending、status=busy、currentDelay 归零 |
+| `chat.message` (role=assistant) | 仅记录 AI_REPLY 日志，不影响状态机 |
 
 ## 3. 文件职责
 
@@ -115,6 +132,7 @@ function createLogger(logDir) {
 | `DEBOUNCE` | 去抖被 busy 取消 |
 | `PERM` | permission.asked/replied |
 | `QUEST` | question.asked/replied/rejected |
+| `RESET` | 用户输入触发 resetIdleState() |
 | `USER_INPUT` | 用户消息（通过 chat.message hook） |
 | `AI_REPLY` | AI 回复（通过 chat.message hook） |
 | `DISPOSE` | 插件关闭 |
@@ -130,12 +148,20 @@ function createLogger(logDir) {
   - 通过 `message.role` 区分 user/assistant
   - 文本从 `parts[].text` 拼接，截断至 2000 字符
 
-### 去抖机制
+### 去抖与退避机制
 
-- `scheduleCheck(sessionID, delay=200)` 用 `setTimeout` 实现
+- `scheduleCheck(sessionID, delay)` 用 `setTimeout` 实现
+- 不传 delay 时使用 `currentDelay`（随历史 idle 循环递增）
 - 已有 pending 则 `clearTimeout` 重置
 - 到期后检查 `status === 'idle' && !waitingPermission && !waitingQuestion`
 - 若中途变为 busy，立即取消
+- TRUE_IDLE 触发后 `currentDelay *= 2`（无上限）
+- TRUE_IDLE 触发后**自动调度下一轮检查**（使用递增后的 currentDelay），形成周期性链
+- 用户输入（`chat.message` role=user）触发 `resetIdleState()`：
+  - 取消 pending check（切断链）
+  - 清空 waitingPermission/waitingQuestion
+  - status = 'busy'
+  - currentDelay 归零至 BASE_DELAY（200ms）
 
 ## 5. 部署规范
 

@@ -19,6 +19,9 @@ const server = async (input) => {
   const logDir = path.join(directory, '.log');
   const log = createLogger(logDir);
 
+  const BASE_DELAY = 200;
+  let currentDelay = BASE_DELAY;
+
   const t = {
     status: 'idle',
     waitingPermission: false,
@@ -27,17 +30,32 @@ const server = async (input) => {
     pendingCheck: null,
   };
 
-  function scheduleCheck(sessionID, delay = 200) {
+  function resetIdleState(sessionID) {
+    if (t.pendingCheck) {
+      clearTimeout(t.pendingCheck);
+      t.pendingCheck = null;
+    }
+    t.waitingPermission = false;
+    t.waitingQuestion = false;
+    t.status = 'busy';
+    currentDelay = BASE_DELAY;
+    log('RESET', `session=${sessionID} state reset on user input`);
+  }
+
+  function scheduleCheck(sessionID, delay) {
+    const d = delay ?? currentDelay;
     if (t.pendingCheck) clearTimeout(t.pendingCheck);
     t.pendingCheck = setTimeout(() => {
       const trueIdle = t.status === 'idle' && !t.waitingPermission && !t.waitingQuestion;
       if (trueIdle) {
-        log('TRUE_IDLE', `session=${sessionID} status=idle perm=off quest=off`);
+        log('TRUE_IDLE', `session=${sessionID} status=idle perm=off quest=off delay=${d}`);
+        currentDelay *= 2;
+        scheduleCheck(sessionID);
       } else {
         log('SKIP', `session=${sessionID} not true idle: status=${t.status} perm=${t.waitingPermission} quest=${t.waitingQuestion}`);
+        t.pendingCheck = null;
       }
-      t.pendingCheck = null;
-    }, delay);
+    }, d);
   }
 
   log('INIT', `Plugin initialized | directory=${directory}`);
@@ -61,7 +79,7 @@ const server = async (input) => {
           log('STATUS', `session=${sid} ${oldStatus} -> ${s.type}`);
           if (s.type === 'idle' && !t.waitingPermission && !t.waitingQuestion) {
             log('CANDIDATE', `session=${sid} idle, scheduling check`);
-            scheduleCheck(sid, 200);
+            scheduleCheck(sid);
           }
           if (s.type === 'busy' && t.pendingCheck) {
             clearTimeout(t.pendingCheck);
@@ -109,6 +127,9 @@ const server = async (input) => {
       const modelStr = model ? `${model.providerID}/${model.modelID}` : '';
       const entry = textContent.slice(0, 2000);
       log(role === 'user' ? 'USER_INPUT' : 'AI_REPLY', `session=${sessionID} msg=${messageID} model=${modelStr} len=${textContent.length} text=${JSON.stringify(entry)}`);
+      if (role === 'user') {
+        resetIdleState(sessionID);
+      }
     },
 
     dispose: async () => {
