@@ -25,8 +25,6 @@ const server = async (input) => {
   const logDir = path.join(directory, '.log');
   const log = createLogger(logDir);
 
-  const trigger = new SubagentTrigger({ client, log, directory });
-
   let mainSessionID = null;
   let pendingTimer = null;
 
@@ -78,13 +76,15 @@ const server = async (input) => {
     },
   });
 
+  const trigger = new SubagentTrigger({ client, detector, log, directory });
+
   log('INIT', 'Plugin initialized');
-  log('DESIGN', 'Subagent: idle detection -> 60s wait -> trigger main agent to call Task tool');
+  log('DESIGN', 'Subagent: idle detection -> 60s wait -> prompt main session (skip user input detection) -> agent calls Task tool');
   log('DESIGN', `agentType=${SUBAGENT_AGENT_TYPE} delay=${TRIGGER_DELAY_MS}ms`);
   log('DESIGN', JSON.stringify({
-    mechanism: 'agent-driven Task tool (host manages subagent session + link + persistence)',
+    mechanism: 'agent-driven Task tool with skipNextUserMessage flag',
     signals: ['session.status', 'session.idle', 'permission.asked', 'question.asked'],
-    rule: 'TRUE_IDLE -> wait 60s -> prompt main session -> agent calls Task(explore) -> host renders link',
+    rule: 'TRUE_IDLE -> wait 60s -> session.prompt (skip detection) -> agent calls Task(explore) -> host renders link',
   }));
 
   return {

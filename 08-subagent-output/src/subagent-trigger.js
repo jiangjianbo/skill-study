@@ -12,13 +12,15 @@
  */
 export class SubagentTrigger {
   #client;
+  #detector;
   #log;
   #directory;
   #inFlight = false;
   #count = 0;
 
-  constructor({ client, log, directory }) {
+  constructor({ client, detector, log, directory }) {
     this.#client = client;
+    this.#detector = detector;
     this.#log = log;
     this.#directory = directory;
   }
