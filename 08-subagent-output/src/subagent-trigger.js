@@ -44,12 +44,14 @@ export class SubagentTrigger {
    * @param {string} opts.agentType - 子代理类型（如 'explore'）
    * @param {string} opts.prompt - 子代理的 prompt 文本
    * @param {string} [opts.description] - Task 描述（用于 TUI 显示）
+   * @param {boolean} [opts.background=false] - 是否后台异步执行
    */
   async trigger(sessionID, opts = {}) {
     const {
       agentType = 'explore',
       prompt: subPrompt = 'Hello!',
       description,
+      background = false,
     } = opts;
 
     if (this.#inFlight) {
@@ -61,7 +63,7 @@ export class SubagentTrigger {
     this.#count++;
 
     const desc = description || `subagent-hello #${this.#count}`;
-    const instruction = this.#buildInstruction(agentType, subPrompt, desc);
+    const instruction = this.#buildInstruction(agentType, subPrompt, desc, background);
 
     this.#log(
       'TRIGGER',
@@ -91,16 +93,22 @@ export class SubagentTrigger {
    * 构建指示主 agent 调用 Task 工具的 prompt 文本。
    * 该文本会作为 user message 出现在主会话中。
    */
-  #buildInstruction(agentType, subPrompt, description) {
-    return [
+  #buildInstruction(agentType, subPrompt, description, background) {
+    const lines = [
       '[subagent-hello 自动触发]',
       '',
       '请立即调用 Task 工具，使用以下参数：',
       `- subagent_type: "${agentType}"`,
+    ];
+    if (background) {
+      lines.push(`- background: ${background}`);
+    }
+    lines.push(
       `- description: "${description}"`,
       `- prompt: "${subPrompt}"`,
       '',
       '直接调用 Task 工具，不要添加任何额外评论或解释。',
-    ].join('\n');
+    );
+    return lines.join('\n');
   }
 }
